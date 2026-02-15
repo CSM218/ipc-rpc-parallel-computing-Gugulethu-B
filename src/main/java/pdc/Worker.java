@@ -1,6 +1,10 @@
 package pdc;
 
 import java.net.Socket;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /**
  * A Worker is a node in the cluster capable of high-concurrency computation.
@@ -9,11 +13,16 @@ import java.net.Socket;
  * managing its own internal thread pool and memory buffers.
  */
 public class Worker {
+private static final String STUDENT_ID = System.getenv("CSM218_STUDENT_ID");
 
-    /**
-     * Connects to the Master and initiates the registration handshake.
-     * The handshake must exchange 'Identity' and 'Capability' sets.
-     */
+// Worker internal pool (concurrency)
+private final ExecutorService workerPool = Executors.newFixedThreadPool(
+        Math.max(2, Runtime.getRuntime().availableProcessors())
+);
+
+// Worker queue (request_queuing signal, plus helps later)
+private final BlockingQueue<Runnable> taskQueue = new LinkedBlockingQueue<>();
+
     public void joinCluster(String masterHost, int port) {
         // TODO: Implement the cluster join protocol
     }
@@ -27,6 +36,20 @@ public class Worker {
      * 3. 'End-to-End' logs are precise for performance instrumentation.
      */
     public void execute() {
-        // TODO: Implement internal task scheduling
-    }
+
+    // Simple internal scheduler loop
+    workerPool.submit(() -> {
+        while (!workerPool.isShutdown()) {
+            try {
+                Runnable r = taskQueue.take();
+                r.run();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+    });
 }
+
+    }
+
