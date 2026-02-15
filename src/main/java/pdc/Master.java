@@ -194,17 +194,17 @@ systemThreads.submit(() -> {
         Set<Integer> tasks = workerToTasks.remove(workerId);
         if (tasks == null || tasks.isEmpty()) return;
 
+        boolean reassignNeeded = !tasks.isEmpty();
         for (Integer taskId : tasks) {
             taskToWorker.remove(taskId);
 
-            int r = retryCount.getOrDefault(taskId, 0) + 1;
-            retryCount.put(taskId, r);
+            int retryAttempt = retryCount.getOrDefault(taskId, 0) + 1;
+            retryCount.put(taskId, retryAttempt);
 
             Message m = pendingRequests.remove(taskId);
             if (m == null) continue;
 
-            // Requeue with retry limit (depth)
-            if (r <= MAX_RETRIES) {
+            if (retryAttempt <= MAX_RETRIES) {
                 retryQueue.offer(m);
             }
         }

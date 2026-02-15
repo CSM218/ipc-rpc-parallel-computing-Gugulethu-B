@@ -109,7 +109,14 @@ public class Message {
 
             byte[] frame = new byte[4 + frameLen];
             ByteBuffer.wrap(frame).putInt(frameLen);
-            in.readFully(frame, 4, frameLen); // fragmentation safe
+            
+            // Explicit loop for fragmentation handling (supports jumbo payloads > MTU)
+            int bytesRead = 0;
+            while (bytesRead < frameLen) {
+                int n = in.read(frame, 4 + bytesRead, frameLen - bytesRead);
+                if (n == -1) throw new EOFException("Connection closed during frame read");
+                bytesRead += n;
+            }
 
             return unpack(frame);
         } catch (EOFException eof) {
