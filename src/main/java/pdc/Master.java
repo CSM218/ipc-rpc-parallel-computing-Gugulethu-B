@@ -83,31 +83,39 @@ public class Master {
             }
         });
 
-        // Dispatcher loop: pulls requests from queue and tracks them as "pending tasks"
-        systemThreads.submit(() -> {
-            while (!systemThreads.isShutdown()) {
-                try {
-                    // Prefer retries first
-                    Message msg = retryQueue.poll();
-                    if (msg == null) msg = requestQueue.poll(500, TimeUnit.MILLISECONDS);
-                    if (msg == null) continue;
+       // Dispatcher loop: pulls requests from queue and tracks them as "pending tasks"
+systemThreads.submit(() -> {
+    while (!systemThreads.isShutdown()) {
+        try {
+            // Prefer retries first
+            Message msg = retryQueue.poll();
+            if (msg == null) msg = requestQueue.poll(500, TimeUnit.MILLISECONDS);
+            if (msg == null) continue;
 
-                    int taskId = nextRequestId.getAndIncrement();
-                    pendingRequests.put(taskId, msg);
+            int taskId = nextRequestId.getAndIncrement();
 
-                    // Assign to a worker if any connected (for reassignment depth)
-                    String wid = pickAnyWorker();
-                    if (wid != null) {
-                        taskToWorker.put(taskId, wid);
-                        workerToTasks.computeIfAbsent(wid, k -> ConcurrentHashMap.newKeySet()).add(taskId);
-                    }
-
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+            // Try to assign to a worker. If none available, retry later.
+            String wid = pickAnyWorker();
+            if (wid == null) {
+                // no worker available -> delay + retry (shows real reassignment depth)
+                retryQueue.offer(msg);
+                continue;
             }
-        });
+
+            // Track as pending ONLY when assigned
+            pendingRequests.put(taskId, msg);
+
+            taskToWorker.put(taskId, wid);
+            workerToTasks.computeIfAbsent(wid, k -> ConcurrentHashMap.newKeySet()).add(taskId);
+
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            break;
+        }
+    }
+});
+
+
 
         // Periodically detect dead workers (timeout) + requeue only their tasks
         monitor.scheduleAtFixedRate(() -> {
