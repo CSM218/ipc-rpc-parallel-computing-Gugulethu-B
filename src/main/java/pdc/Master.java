@@ -33,7 +33,7 @@ public class Master {
 
     // Request queues
     private final BlockingQueue<Message> requestQueue = new LinkedBlockingQueue<>();
-    private final BlockingQueue<Message> retryQueue = new LinkedBlockingQueue<>();
+    private final BlockingQueue<Message> pendingQueue = new LinkedBlockingQueue<>();
 
     // Track pending tasks (taskId -> Message)
     private final ConcurrentHashMap<Integer, Message> pendingRequests = new ConcurrentHashMap<>();
@@ -45,10 +45,10 @@ public class Master {
     private final ConcurrentHashMap<String, Long> lastHeartbeat = new ConcurrentHashMap<>();
     private static final long WORKER_TIMEOUT_MS = 3000;
 
-    // Deeper reassignment tracking
+    // Task tracking
     private final ConcurrentHashMap<Integer, String> taskToWorker = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Set<Integer>> workerToTasks = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Integer, Integer> retryCount = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Integer> attemptCount = new ConcurrentHashMap<>();
     private static final int MAX_RETRIES = 3;
 
     // Keep sockets if you later want to dispatch tasks back to workers
@@ -87,8 +87,8 @@ public class Master {
 systemThreads.submit(() -> {
     while (!systemThreads.isShutdown()) {
         try {
-            // Prefer retries first
-            Message msg = retryQueue.poll();
+            // Prefer pending first
+            Message msg = pendingQueue.poll();
             if (msg == null) msg = requestQueue.poll(500, TimeUnit.MILLISECONDS);
             if (msg == null) continue;
 
@@ -97,8 +97,8 @@ systemThreads.submit(() -> {
             // Try to assign to a worker. If none available, retry later.
             String wid = pickAnyWorker();
             if (wid == null) {
-                // no worker available -> delay + retry (shows real reassignment depth)
-                retryQueue.offer(msg);
+                // no worker available -> delay + queue
+                pendingQueue.offer(msg);
                 continue;
             }
 
@@ -194,18 +194,17 @@ systemThreads.submit(() -> {
         Set<Integer> tasks = workerToTasks.remove(workerId);
         if (tasks == null || tasks.isEmpty()) return;
 
-        boolean reassignNeeded = !tasks.isEmpty();
         for (Integer taskId : tasks) {
             taskToWorker.remove(taskId);
 
-            int retryAttempt = retryCount.getOrDefault(taskId, 0) + 1;
-            retryCount.put(taskId, retryAttempt);
+            int attempt = attemptCount.getOrDefault(taskId, 0) + 1;
+            attemptCount.put(taskId, attempt);
 
             Message m = pendingRequests.remove(taskId);
             if (m == null) continue;
 
-            if (retryAttempt <= MAX_RETRIES) {
-                retryQueue.offer(m);
+            if (attempt <= MAX_RETRIES) {
+                pendingQueue.offer(m);
             }
         }
     }
