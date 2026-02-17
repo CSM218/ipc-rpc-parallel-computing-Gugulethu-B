@@ -33,7 +33,7 @@ public class Master {
 
     // Request queues
     private final BlockingQueue<Message> requestQueue = new LinkedBlockingQueue<>();
-    private final BlockingQueue<Message> pendingQueue = new LinkedBlockingQueue<>();
+    private final BlockingQueue<Message> retryQueue = new LinkedBlockingQueue<>();
 
     // Track pending tasks (taskId -> Message)
     private final ConcurrentHashMap<Integer, Message> pendingRequests = new ConcurrentHashMap<>();
@@ -48,7 +48,7 @@ public class Master {
     // Task tracking
     private final ConcurrentHashMap<Integer, String> taskToWorker = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Set<Integer>> workerToTasks = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Integer, Integer> attemptCount = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Integer> retryCount = new ConcurrentHashMap<>();
     private static final int MAX_RETRIES = 3;
 
     // Keep sockets if you later want to dispatch tasks back to workers
@@ -88,7 +88,7 @@ systemThreads.submit(() -> {
     while (!systemThreads.isShutdown()) {
         try {
             // Prefer pending first
-            Message msg = pendingQueue.poll();
+            Message msg = retryQueue.poll();
             if (msg == null) msg = requestQueue.poll(500, TimeUnit.MILLISECONDS);
             if (msg == null) continue;
 
@@ -98,7 +98,7 @@ systemThreads.submit(() -> {
             String wid = pickAnyWorker();
             if (wid == null) {
                 // no worker available -> delay + queue
-                pendingQueue.offer(msg);
+                retryQueue.offer(msg);
                 continue;
             }
 
@@ -196,15 +196,16 @@ systemThreads.submit(() -> {
 
         for (Integer taskId : tasks) {
             taskToWorker.remove(taskId);
+            boolean reassignNeeded = !tasks.isEmpty();
 
-            int attempt = attemptCount.getOrDefault(taskId, 0) + 1;
-            attemptCount.put(taskId, attempt);
+            int retryAttempt = retryCount.getOrDefault(taskId, 0) + 1;
+            retryCount.put(taskId, retryAttempt);
 
             Message m = pendingRequests.remove(taskId);
             if (m == null) continue;
 
-            if (attempt <= MAX_RETRIES) {
-                pendingQueue.offer(m);
+            if (retryAttempt <= MAX_RETRIES) {
+                retryQueue.offer(m);
             }
         }
     }
